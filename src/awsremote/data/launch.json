@@ -1,0 +1,8 @@
+{
+	"DryRun": false,
+	"ImageId": "ami-038d7340c9ba7cc99",
+	"LaunchTemplate": {
+		"LaunchTemplateName": "Money20_Systemtest",
+		"Version": "5"
+	}
+}

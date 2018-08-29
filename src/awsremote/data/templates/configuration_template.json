@@ -1,0 +1,9 @@
+{
+	"configuration": {
+		"test-image": ""
+	},
+	"environments": {
+		"systemtest": "",
+		"production": ""
+	}
+}
