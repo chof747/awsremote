@@ -1,6 +1,8 @@
 {
 	"configuration": {
-		"test-image": ""
+		"test-image": "",
+		"key-file": "",
+		"application": ""
 	},
 	"environments": {
 		"systemtest": "",
