@@ -107,6 +107,12 @@ def main(argv=None):
         
         elif command == 'login':
             awsremote.login(opts.environment)
+            
+        elif command == 'start':
+            awsremote.startInstance(opts.environment)
+
+        elif command == 'stop':
+            awsremote.stopInstance(opts.environment)
         
 
     except OptParseError as e:

@@ -7,6 +7,7 @@ from .config import Config
 
 import os
 import boto3
+from time import sleep
 
 class AWSRemote:
     
@@ -14,18 +15,61 @@ class AWSRemote:
     #***************************************************************************
         self.__config = Config(projectpath) 
         self.__config.verbosity = verbosity
+        self.__description = {}
+        self.__client = boto3.client('ec2')
+        
+    def error(self, message):
+    #***************************************************************************
+        self.__log(self.__config.ERROR, message)
+    
+    def warn(self, message):
+    #***************************************************************************
+        self.__log(self.__config.ATTENTION, message)
+
+    def info(self, message):
+    #***************************************************************************
+        self.__log(self.__config.INFO, message)
+
+    def debug(self, message):
+    #***************************************************************************
+        self.__log(self.__config.DEBUG, message)
+
+    def __log(self, level, message):
+    #***************************************************************************
+        self.__config.log(level, message)
         
     @property
     #***************************************************************************
     def config(self):
         return self.__config
     
+    
+    def description(self, environment, cache = True):
+    #***************************************************************************
+        if (not environment in self.__description) or not cache:
+            instanceId = self.__getInstanceOfEnvironment(environment, False)
+            if instanceId != None:
+                self.__description[environment] = \
+                    self.__client.describe_instances(InstanceIds=[instanceId])
+            else:
+                self.__description[environment] = None
+                        
+        return self.__description[environment]
+    
+    def __getIp(self, environment):
+    #***************************************************************************
+        description = self.description(environment, False)
+        if (len(description['Reservations']) > 0):
+            if 'PublicIpAddress' in description['Reservations'][0]['Instances'][0]:
+                return description['Reservations'][0]['Instances'][0]['PublicIpAddress']
+        return None
+
     def __defaultEnv(self, environment, action):
     #***************************************************************************
         if environment =='':
             return 'systemtest'
         elif environment == 'production':
-            self.__config.log(self.__config.ERROR, 
+            self.error( 
                 "You cannot %s production - use EC2 console for that!" % action)
             exit(1)
         else:
@@ -35,7 +79,7 @@ class AWSRemote:
     #***************************************************************************
         instanceId = self.__config.get('environments', environment)
         if (instanceId == None or instanceId == '') and fail:
-            self.__config.log(self.__config.ERROR, 
+            self.error( 
                 "The environment %s is not available" % environment)
             exit(2)        
         elif instanceId == None or instanceId == '':
@@ -53,44 +97,42 @@ class AWSRemote:
             
         return "%s%s_%s" % (prefix, application, environment)
     
-    def __isStarted(self, environment, description = None):
-        
-        instanceId = self.__getInstanceOfEnvironment(environment, fail=False)
-        if instanceId != None:
-            return False
+    def __isStarted(self, environment):
+    #***************************************************************************        
+        description = self.description(environment)
+        if description != None:
+            return description['Reservations'][0]['Instances'][0]["State"]["Name"] == "running"
         else:
-            return description['Reservations'][0]['Instances'][0]["State"]["Name"] != "running"
+            return False
             
         
             
     def makeAmiImage(self, imageName, imageDescription):
     #***************************************************************************        
         instanceId = self.__config.get('environments', 'production')
-        self.__config.log(self.__config.INFO,  
+        self.info(  
             "Image will be taken from the following running instance: %s" % instanceId)
         oldAmi = self.__config.get('configuration', 'test-image')
     
-        client = boto3.client('ec2')
-        
         if oldAmi != "":
-            imageinfo = client.describe_images(
+            imageinfo = self.__client.describe_images(
                 ImageIds=[oldAmi]
             )
-            self.__config.log(self.__config.INFO, "Old Image id - will be deleted: %s" % oldAmi)
-            self.__config.log(self.__config.DEBUG, imageinfo['Images'])
+            self.info( "Old Image id - will be deleted: %s" % oldAmi)
+            self.debug( imageinfo['Images'])
             
-            client.deregister_image(
+            self.__client.deregister_image(
                 ImageId=oldAmi
             )
             
-        response = client.create_image(
+        response = self.__client.create_image(
             Name=imageName,
             Description=imageDescription,
             InstanceId=instanceId
         )    
         self.__config.set('configuration', 'test-image', response['ImageId'])
         
-        client.create_tags(
+        self.__client.create_tags(
             Resources=[response['ImageId']],
             Tags=[{
                'Key' : 'Name',
@@ -99,7 +141,7 @@ class AWSRemote:
         )
         
         if oldAmi != "":
-            client.delete_snapshot(
+            self.__client.delete_snapshot(
                 SnapshotId=imageinfo['Images'][0]['BlockDeviceMappings'][0]['Ebs']['SnapshotId'])
             
     def createInstanceFromAmi(self, environment='', replace = False, amiImage=''):
@@ -118,12 +160,12 @@ class AWSRemote:
                     
         if amiImage == '':
             amiImage = self.__config.get('configuration', 'test-image')
-        
+
         instanceName = self.__environmentName(environment)
         
         self.__config.log(self.config.INFO, "Creating instance from ami: %s" % amiImage)
-        client = boto3.client('ec2')
-        response = client.run_instances(
+
+        response = self.__client.run_instances(
             #DryRun=True,
             ImageId=amiImage,
             MaxCount=1,
@@ -135,7 +177,7 @@ class AWSRemote:
         
         instanceId = response['Instances'][0]['InstanceId']      
         #set the name  
-        client.create_tags(
+        self.__client.create_tags(
             Resources=[instanceId],
             Tags=[{
                'Key' : 'Name',
@@ -152,10 +194,9 @@ class AWSRemote:
     #***************************************************************************
         environment = self.__defaultEnv(environment, "terminate")
         instanceId = self.__getInstanceOfEnvironment(environment)
-        client = boto3.client('ec2')
 
         #rename instance to indicate termination        
-        client.create_tags(
+        self.__client.create_tags(
             Resources=[instanceId],
             Tags=[{
                'Key' : 'Name',
@@ -163,7 +204,7 @@ class AWSRemote:
             }])
 
         #make the volume deleted on termination
-        client.modify_instance_attribute(
+        self.__client.modify_instance_attribute(
             InstanceId=instanceId,
             BlockDeviceMappings=[{
                 'DeviceName': '/dev/sda1',
@@ -172,14 +213,31 @@ class AWSRemote:
                 }
             }])
         
-        self.__config.log(self.__config.INFO, 
+        self.info( 
             "Terminating instance %s for environment %s " % \
             (instanceId, environment))
-        client.terminate_instances(InstanceIds=[instanceId])
+        self.__client.terminate_instances(InstanceIds=[instanceId])
         self.__config.set('environments', environment, '')
         
     def startInstance(self, environment):
-        return ""
+    #***************************************************************************
+        self.__client.start_instances(InstanceIds=[
+            self.__getInstanceOfEnvironment(environment)]);
+        
+        ip = None
+        while ip == None:
+            sleep(5)
+            ip = self.__getIp(environment)
+            
+        self.info('Instance for environment %s started. Public IP = %s' 
+            % (environment, ip))
+        return ip
+    
+    def stopInstance(self, environment):
+        environment = self.__defaultEnv(environment, 'stop')
+        self.__client.stop_instances(InstanceIds=[
+            self.__getInstanceOfEnvironment(environment, True)
+        ])
         
         
     def login(self, environment = '', user='ubuntu'):
@@ -190,24 +248,23 @@ class AWSRemote:
         key = self.__config.get('configuration', 'key-file')
         instanceId = self.__getInstanceOfEnvironment(environment)
         
-        self.__config.log(self.__config.DEBUG, "Using key file: %s" % key)
-        self.__config.log(self.__config.INFO, 
+        self.debug( "Using key file: %s" % key)
+        self.info( 
             "Retreiving connection info for instance %s" % instanceId)
 
-        client = boto3.client('ec2')
+        ip = self.__getIp(environment)
         
-        response = client.describe_instances(InstanceIds=[instanceId])
-        
-        if not self.__isStarted(environment, response):
-            self.__config.log(self.__config.INFO,
+        if not self.__isStarted(environment):
+            self.info(
                 "Instance %s is not running - starting ... " % instanceId)
             ip = self.startInstance(environment)
-            exit(0)    
-        elif (len(response['Reservations']) > 0):
-            ip = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
-            self.__config.log(self.__config.INFO,
+            self.info('Wait 10sec for startup finalization ...')
+            sleep(10)
+                    
+        if ip != None:
+            self.info(
                 "Connectiong to %s" % ip)
             os.system("ssh -i %s -t ubuntu@%s 'exec bash'" % (key, ip))
         else:
-            self.__config.log(self.__config.ERROR, 
+            self.error( 
                 "Instance %s not available" % instanceId)
