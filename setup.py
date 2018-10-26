@@ -13,7 +13,7 @@ with open('README.rst', 'r') as f:
     packageDescription += f.read()
 
 setup(name             = 'awsremote',
-      version          = '0.1.0',
+      version          = '0.2.0',
       author           = 'Christian Hofbauer',
       author_email     = 'chof@gmx.at',
       description      = 'A python tool and package that keeps track of ' +
